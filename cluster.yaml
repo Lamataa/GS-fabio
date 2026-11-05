@@ -1,0 +1,30 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+  name: fiap-store
+  region: us-east-1
+  version: "1.35"
+iam:
+  withOIDC: false
+  serviceRoleARN: arn:aws:iam::834071646683:role/LabRole
+availabilityZones: ["us-east-1a", "us-east-1b", "us-east-1c"]
+vpc:
+  nat:
+    gateway: Disable
+addons:
+  - name: vpc-cni
+    configurationValues: '{"enableNetworkPolicy": "true"}'
+  - name: coredns
+  - name: kube-proxy
+  - name: aws-ebs-csi-driver
+  - name: metrics-server
+managedNodeGroups:
+  - name: ng-principal
+    instanceType: t3.medium
+    minSize: 4
+    desiredCapacity: 4
+    maxSize: 5
+    privateNetworking: false
+    volumeSize: 20
+    iam:
+      instanceRoleARN: arn:aws:iam::834071646683:role/LabRole
