@@ -1,0 +1,25 @@
+# Limites do namespace store-prod (item C7).
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: store-prod-quota
+  namespace: store-prod
+spec:
+  hard:
+    pods: "30"
+    requests.cpu: "4"
+    requests.memory: 4Gi
+    limits.cpu: "8"
+    limits.memory: 8Gi
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: store-prod-limits
+  namespace: store-prod
+spec:
+  limits:
+    - type: Container
+      default:          { cpu: 500m, memory: 256Mi }
+      defaultRequest:   { cpu: 100m, memory: 128Mi }
+      max:              { cpu: "1",  memory: 1Gi }

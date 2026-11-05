@@ -1,0 +1,49 @@
+# Worker que consome a fila. Sem "replicas": quem escala e o KEDA (0 a 5).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: store-worker
+  namespace: store-prod
+spec:
+  selector:
+    matchLabels:
+      app: store-worker
+  template:
+    metadata:
+      labels:
+        app: store-worker
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: store-worker
+          image: 834071646683.dkr.ecr.us-east-1.amazonaws.com/store-worker:1.0
+          envFrom:
+            - configMapRef:
+                name: store-api-config
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef: { fieldPath: metadata.name }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 300m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: db-secret
+              mountPath: /etc/secrets/db
+              readOnly: true
+      volumes:
+        - name: db-secret
+          secret:
+            secretName: store-db-credentials

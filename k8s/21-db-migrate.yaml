@@ -1,0 +1,50 @@
+# Job de migracao (item E1). E um "hook" do Argo CD: Job e imutavel,
+# entao o Argo recria a cada sincronizacao (o migrate e idempotente).
+# Sem ttlSecondsAfterFinished: o Job precisa EXISTIR na hora da correcao.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate
+  namespace: store-prod
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "1"            # depois do banco (wave 0) estar pronto
+spec:
+  backoffLimit: 4
+  template:
+    metadata:
+      labels:
+        app: db-migrate
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: 834071646683.dkr.ecr.us-east-1.amazonaws.com/store-api:1.0
+          command: ["python", "-m", "app.migrate"]
+          envFrom:
+            - configMapRef:
+                name: store-api-config
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: db-secret
+              mountPath: /etc/secrets/db
+              readOnly: true
+      volumes:
+        - name: db-secret
+          secret:
+            secretName: store-db-credentials

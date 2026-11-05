@@ -1,0 +1,51 @@
+# CronJob do relatorio (item E2). Roda de hora em hora.
+# Para disparar agora: kubectl create job --from=cronjob/store-report manual-1 -n store-prod
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: store-report
+  namespace: store-prod
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: store-report
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: store-report
+              image: 834071646683.dkr.ecr.us-east-1.amazonaws.com/store-worker:1.0
+              command: ["python", "-m", "worker.relatorio"]
+              envFrom:
+                - configMapRef:
+                    name: store-api-config
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits:   { cpu: 200m, memory: 128Mi }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: db-secret
+                  mountPath: /etc/secrets/db
+                  readOnly: true
+          volumes:
+            - name: db-secret
+              secret:
+                secretName: store-db-credentials

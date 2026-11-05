@@ -1,0 +1,25 @@
+# Application do Argo CD (item G2). Fica FORA da pasta k8s/.
+# Aplicar uma vez por cluster:  kubectl apply -f argocd-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: fiap-store
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Lamataa/GS-fabio.git
+    targetRevision: main
+    path: k8s
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 10
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

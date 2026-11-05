@@ -1,0 +1,18 @@
+# Configuracao da aplicacao (item D3). Nada sensivel aqui.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: store-api-config
+  namespace: store-prod
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+data:
+  DB_HOST: store-db.store-data.svc.cluster.local
+  DB_PORT: "5432"
+  DB_NAME: fiapstore
+  DB_USER: fiapstore
+  DB_PASSWORD_FILE: /etc/secrets/db/password    # arquivo montado do Secret
+  REDIS_HOST: store-redis.store-data.svc.cluster.local
+  REDIS_PORT: "6379"
+  QUEUE_NAME: pedidos
+  APP_ENV: producao

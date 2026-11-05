@@ -1,0 +1,32 @@
+# Namespaces da aplicacao.
+# store-prod: Pod Security "restricted" (enforce) -> nada roda como root.
+# store-data: Pod Security "baseline" (Postgres e Redis oficiais precisam iniciar como root).
+# monitoring: onde fica o DaemonSet (node-exporter le /proc e /sys do no -> "privileged").
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: store-prod
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: store-data
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+  labels:
+    pod-security.kubernetes.io/enforce: privileged

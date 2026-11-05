@@ -1,0 +1,97 @@
+# API (itens B1-B7, D3, D4, E3, F1, F5).
+# Sem "replicas": quem decide o numero de Pods e o HPA (3 a 6).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: store-api
+  namespace: store-prod
+automountServiceAccountToken: true   # a API usa o token para ler o objeto Node (zona)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: store-api
+  namespace: store-prod
+spec:
+  selector:
+    app: store-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: store-api
+  namespace: store-prod
+spec:
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0       # nunca derruba um Pod antes do novo estar pronto
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: store-api
+  template:
+    metadata:
+      labels:
+        app: store-api
+    spec:
+      serviceAccountName: store-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:       # espalha as replicas pelas zonas (item B4)
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: store-api
+      containers:
+        - name: store-api
+          image: 834071646683.dkr.ecr.us-east-1.amazonaws.com/store-api:1.0
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: store-api-config
+          env:                           # Downward API (item D4)
+            - name: POD_NAME
+              valueFrom:
+                fieldRef: { fieldPath: metadata.name }
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef: { fieldPath: metadata.namespace }
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef: { fieldPath: spec.nodeName }
+          readinessProbe:
+            httpGet: { path: /ready, port: 8000 }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: db-secret                 # senha como arquivo (item E3)
+              mountPath: /etc/secrets/db
+              readOnly: true
+      volumes:
+        - name: db-secret
+          secret:
+            secretName: store-db-credentials

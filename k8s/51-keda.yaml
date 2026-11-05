@@ -1,0 +1,21 @@
+# KEDA (item G1): o worker escala de 0 a 5 conforme o tamanho da lista "pedidos" no Redis.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: store-worker
+  namespace: store-prod
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  scaleTargetRef:
+    name: store-worker
+  minReplicaCount: 0
+  maxReplicaCount: 5
+  pollingInterval: 5        # confere a fila a cada 5 s
+  cooldownPeriod: 30        # 30 s sem fila -> volta a 0
+  triggers:
+    - type: redis
+      metadata:
+        address: store-redis.store-data.svc.cluster.local:6379
+        listName: pedidos
+        listLength: "5"     # 1 Pod para cada 5 pedidos na fila

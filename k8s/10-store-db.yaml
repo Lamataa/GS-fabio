@@ -1,0 +1,76 @@
+# Banco PostgreSQL (itens D1, D2, C2).
+# A senha vem do Secret store-db-credentials (criado na mao, fora do Git).
+apiVersion: v1
+kind: Service
+metadata:
+  name: store-db
+  namespace: store-data
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  type: ClusterIP            # interno: nada de NodePort/LoadBalancer
+  selector:
+    app: store-db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: store-db
+  namespace: store-data
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  serviceName: store-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: store-db
+  template:
+    metadata:
+      labels:
+        app: store-db
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: fiapstore
+            - name: POSTGRES_USER
+              value: fiapstore
+            - name: POSTGRES_PASSWORD_FILE
+              value: /etc/secrets/db/password
+            - name: PGDATA                       # subdiretorio: a raiz do EBS tem lost+found
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U fiapstore -d fiapstore"]
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: db-secret
+              mountPath: /etc/secrets/db
+              readOnly: true
+      volumes:
+        - name: db-secret
+          secret:
+            secretName: store-db-credentials
+  volumeClaimTemplates:
+    - metadata:
+        name: data                               # PVC final: data-store-db-0
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: ebs-gp3
+        resources:
+          requests:
+            storage: 5Gi

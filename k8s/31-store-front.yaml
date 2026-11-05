@@ -1,0 +1,61 @@
+# Front-end nginx (2 replicas). Sem token da API do Kubernetes (item F2).
+apiVersion: v1
+kind: Service
+metadata:
+  name: store-front
+  namespace: store-prod
+spec:
+  selector:
+    app: store-front
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: store-front
+  namespace: store-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: store-front
+  template:
+    metadata:
+      labels:
+        app: store-front
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: store-front
+          image: 834071646683.dkr.ecr.us-east-1.amazonaws.com/store-front:1.0
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp                       # nginx grava pid e temporarios em /tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
