@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FIAP Store</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="marca">FIAP <strong>Store</strong></div>
+    <div id="versao" class="versao">API carregando...</div>
+  </header>
+
+  <main>
+    <section class="painel-plataforma">
+      <div class="titulo-secao">
+        <h2>Painel da plataforma</h2>
+        <button id="btn-recheck" class="secundario">Verificar de novo</button>
+      </div>
+      <p class="nota">
+        Autodiagnóstico feito de dentro do cluster. Serve para vocês se autoavaliarem: a correção
+        oficial é feita com <code>kubectl</code> durante a demonstração.
+      </p>
+      <div id="resumo-replicas" class="resumo"></div>
+      <ul id="verificacoes" class="verificacoes"></ul>
+    </section>
+
+    <section>
+      <div class="titulo-secao">
+        <h2>Catálogo</h2>
+        <button id="btn-lote">Gerar 50 pedidos</button>
+      </div>
+      <div id="produtos" class="produtos"></div>
+    </section>
+
+    <section>
+      <div class="titulo-secao">
+        <h2>Pedidos</h2>
+        <span id="resumo-pedidos" class="nota"></span>
+      </div>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Produto</th><th>Qtd</th><th>Valor</th><th>Status</th><th>Criado por</th><th>Processado por</th></tr>
+        </thead>
+        <tbody id="pedidos"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Relatórios (CronJob)</h2>
+      <table>
+        <thead><tr><th>Gerado em</th><th>Pod</th><th>Pedidos</th><th>Processados</th><th>Pendentes</th><th>Total</th></tr></thead>
+        <tbody id="relatorios"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <div id="aviso" class="aviso" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
