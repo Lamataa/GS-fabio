@@ -1,245 +1,282 @@
-# FIAP Store — aplicação da Global Solution
+# FIAP Store no Amazon EKS — Global Solution
 
 Cloud Developer II · Kubernetes e Serverless
 
-Este repositório contém a **aplicação pronta** da FIAP Store. O código já funciona: o trabalho do
-grupo **não é programar**, é construir a **plataforma** que roda este sistema no Amazon EKS —
-cluster, manifestos, rede, armazenamento, segurança, escalonamento e entrega por GitOps.
+A aplicação (API, front-end, worker e jobs) foi entregue pronta pelo professor. Este repositório
+contém a **plataforma** que roda a FIAP Store no Amazon EKS: cluster, manifestos Kubernetes, rede,
+armazenamento, segurança, escalonamento e entrega por GitOps (Argo CD).
 
-> Leia o enunciado da Global Solution antes de começar. Ele traz os nomes obrigatórios dos recursos,
-> o checklist de avaliação e o guia de criação do cluster no AWS Academy Learner Lab.
+> O README original da aplicação (contrato de cada serviço) está em
+> [`docs/README-aplicacao.md`](docs/README-aplicacao.md) e o enunciado em
+> [`docs/GS-Enunciado-Alunos.md`](docs/GS-Enunciado-Alunos.md).
+
+## Integrantes
+
+| Nome | RM |
+|---|---|
+| Gabriel Lamata | RM562093 |
+| Luiz Gustavo Parpinelli | RM566493 |
+| _____ | RM_____ |
 
 ---
 
 ## Arquitetura
 
 ```
-                    Internet (HTTPS)
-                          |
-                    [ Ingress ]  -------------------------- namespace store-prod
-                     /        \
-              /api/...          /
-                 |               |
-           [ store-api ]   [ store-front ]
-             |      |
-   grava pedido   enfileira o ID
-             |      |
-             |      v
-             |  [ Redis: lista "pedidos" ] <----- KEDA observa o tamanho da fila
-             |      |
-             |      v
-             |  [ store-worker ]  0..N replicas (escala a zero)
-             |      |
-             v      v
-        [ PostgreSQL store-db ] --------------------------- namespace store-data
-             ^
-             |
-   [ db-migrate (Job) ]   [ store-report (CronJob) ]
+Internet (HTTPS)
+      |
+ [Traefik] LoadBalancer da AWS ............................ namespace traefik
+      |
+ [Ingress store-ingress]  /api -> store-api | / -> store-front   namespace store-prod
+      |                                                     (Pod Security: restricted)
+ [store-api] 3-6 Pods (HPA)      [store-front] 2 Pods
+      |   \
+      |    +--> fila Redis "pedidos" --> [store-worker] 0-5 Pods (KEDA)
+      |
+ [db-migrate] Job (hook do Argo)    [store-report] CronJob
+      v
+ ================= NetworkPolicy (nega toda entrada) ================
+ [store-db] StatefulSet + EBS      [store-redis]            namespace store-data
+                                                            (Pod Security: baseline)
+ [node-exporter] DaemonSet em todos os nós ................ namespace monitoring
+ [Argo CD] sincroniza a pasta k8s/ deste repositório ...... namespace argocd
 ```
 
-| Componente | Imagem | O que faz |
+## Estrutura do repositório
+
+| Caminho | Conteúdo |
+|---|---|
+| `cluster.yaml` | definição do cluster EKS (eksctl) |
+| `argocd-app.yaml` | Application do Argo CD que sincroniza a pasta `k8s/` |
+| `k8s/` | **todos** os manifestos da plataforma (sincronizados pelo Argo CD) |
+| `avaliacao/trivy/` | relatórios de vulnerabilidade das 3 imagens e justificativas |
+| `avaliacao/verifica-gs.sh` | script de correção do professor |
+| `store-api/`, `store-worker/`, `store-front/` | código da aplicação (não alterado) |
+
+### Manifestos (`k8s/`)
+
+| Arquivo | O que cria | Itens |
 |---|---|---|
-| `store-front` | construída a partir de `store-front/` | página da loja + **painel da plataforma** |
-| `store-api` | construída a partir de `store-api/` | catálogo, pedidos, autodiagnóstico |
-| `db-migrate` | **mesma imagem** da `store-api`, outro comando | cria as tabelas e popula o catálogo |
-| `store-worker` | construída a partir de `store-worker/` | consome a fila e processa pedidos |
-| `store-report` | **mesma imagem** do `store-worker`, outro comando | gera o relatório consolidado de vendas |
-| `store-db` | `postgres:16-alpine` (oficial) | banco de dados |
-| `store-redis` | `redis:7.4-alpine` (oficial) | fila de pedidos |
-
-São **três imagens** para construir. Postgres e Redis usam imagens oficiais.
-
----
-
-## Contrato de cada serviço com a plataforma
-
-Esta seção diz **o que cada contêiner espera do Kubernetes**. É a especificação que os manifestos
-de vocês precisam atender.
-
-### store-api
-
-| Item | Valor |
-|---|---|
-| Porta | `8000` |
-| Comando padrão | `uvicorn app.main:app --host 0.0.0.0 --port 8000` |
-| Liveness | `GET /health` — responde 200 enquanto o processo está vivo |
-| Readiness | `GET /ready` — responde 503 se não conseguir falar com o banco |
-| Métricas | `GET /metrics` (formato Prometheus) |
-| Usuário | UID `10001` (não-root) |
-| Sistema de arquivos | funciona com `readOnlyRootFilesystem: true` sem volume extra |
-
-Variáveis de ambiente:
-
-| Variável | Obrigatória | Origem esperada no Kubernetes |
-|---|---|---|
-| `DB_HOST` | sim | ConfigMap — ex.: `store-db.store-data.svc.cluster.local` |
-| `DB_PORT` | não (5432) | ConfigMap |
-| `DB_NAME` | não (`fiapstore`) | ConfigMap |
-| `DB_USER` | não (`fiapstore`) | ConfigMap |
-| `DB_PASSWORD_FILE` **ou** `DB_PASSWORD` | sim | **Secret**: montado como arquivo (preferível) ou via `secretKeyRef` |
-| `REDIS_HOST` | sim | ConfigMap — ex.: `store-redis.store-data.svc.cluster.local` |
-| `REDIS_PORT` | não (6379) | ConfigMap |
-| `QUEUE_NAME` | não (`pedidos`) | ConfigMap |
-| `APP_ENV` | não | ConfigMap — ex.: `producao` |
-| `POD_NAME` | sim | **Downward API** → `metadata.name` |
-| `POD_NAMESPACE` | sim | **Downward API** → `metadata.namespace` |
-| `NODE_NAME` | sim | **Downward API** → `spec.nodeName` |
-| `APP_VERSION` | — | **gravada na imagem** no build (`--build-arg APP_VERSION=...`) |
-
-Permissões na API do Kubernetes: para mostrar em qual **zona de disponibilidade** está rodando, a
-`store-api` lê o objeto `Node` em que foi agendada. Isso exige uma ServiceAccount própria com
-permissão de `get` em `nodes` — um recurso **de cluster**, não de namespace. Pense em qual par de
-objetos RBAC resolve isso. E só isso: o painel acusa se a ServiceAccount conseguir ler Secrets.
-
-### db-migrate
-
-| Item | Valor |
-|---|---|
-| Imagem | a mesma da `store-api` |
-| Comando | `python -m app.migrate` |
-| Comportamento | aguarda o banco por até 90 s, cria as tabelas e o catálogo; termina com código 0. É idempotente: pode rodar várias vezes |
-| Variáveis | as de banco da `store-api` |
-
-### store-worker
-
-| Item | Valor |
-|---|---|
-| Comando padrão | `python -m worker.main` |
-| Porta | nenhuma (não recebe tráfego) |
-| Comportamento | consome IDs da lista Redis `pedidos` e marca cada pedido como processado |
-| Encerramento | ao receber SIGTERM, termina o pedido em andamento e sai com código 0 |
-| Usuário | UID `10001` |
-| Variáveis | as de banco e de Redis da `store-api`, mais `POD_NAME` (Downward API) e `PROCESS_SECONDS` (opcional, padrão 2 s por pedido) |
-| Permissões na API do Kubernetes | **nenhuma** |
-
-O worker foi feito para **escalar a partir de zero** pelo tamanho da fila (KEDA, scaler `redis`,
-lista `pedidos`).
-
-### store-report
-
-| Item | Valor |
-|---|---|
-| Imagem | a mesma do `store-worker` |
-| Comando | `python -m worker.relatorio` |
-| Comportamento | grava uma linha na tabela `relatorios` e termina com código 0 |
-
-### store-front
-
-| Item | Valor |
-|---|---|
-| Porta | `8080` |
-| Usuário | UID `101` (não-root) |
-| Health | `GET /healthz` |
-| Chamadas | a página chama `/api/...` no **mesmo host** — quem encaminha `/api` para a `store-api` é o Ingress |
-| Sistema de arquivos | com `readOnlyRootFilesystem: true`, monte um `emptyDir` em `/tmp` (o nginx grava pid e temporários ali) |
-| Permissões na API do Kubernetes | **nenhuma** |
+| `00-namespaces.yaml` | `store-prod` (restricted), `store-data` (baseline), `monitoring` | C1, F4 |
+| `01-storageclass.yaml` | StorageClass `ebs-gp3` (`ebs.csi.aws.com`) | D2 |
+| `10-store-db.yaml` | StatefulSet + Service interno do PostgreSQL, volume EBS | D1, C2 |
+| `11-store-redis.yaml` | Deployment + Service interno do Redis | D6, C2 |
+| `20-configmap.yaml` | ConfigMap `store-api-config` | D3 |
+| `21-db-migrate.yaml` | Job `db-migrate` (hook `Sync` do Argo CD) | E1 |
+| `30-store-api.yaml` | ServiceAccount, Service e Deployment da API (probes, Downward API, Secret, securityContext, spread por zona, `maxUnavailable: 0`) | B1–B4, B7, D4, E3, F5 |
+| `31-store-front.yaml` | Service e Deployment do front (sem token, `emptyDir` em `/tmp`) | F2, F5 |
+| `32-store-worker.yaml` | Deployment do worker (sem `replicas`, sem token) | F2, F5 |
+| `33-store-report.yaml` | CronJob `store-report` | E2 |
+| `40-ingress.yaml` | Ingress `store-ingress` com TLS | C3, C4 |
+| `50-hpa-pdb.yaml` | HPA (3–6, CPU 70%) e PDB (`minAvailable: 2`) | B5, B6 |
+| `51-keda.yaml` | ScaledObject `store-worker` (Redis, 0–5) | G1 |
+| `60-networkpolicy.yaml` | nega toda entrada em `store-data` e libera só API/worker/jobs/KEDA | C5, C6 |
+| `61-rbac.yaml` | ClusterRole `get nodes` para a API; Role somente leitura para `fiap:devs` | F1, F3 |
+| `62-quota.yaml` | ResourceQuota e LimitRange em `store-prod` | C7 |
+| `70-daemonset.yaml` | DaemonSet `node-exporter` em todos os nós | D5 |
 
 ---
 
-## O painel da plataforma
+## Pré-requisitos
 
-A página inicial da loja tem um **Painel da plataforma**: um autodiagnóstico feito de dentro do
-cluster. Ele chama `/api/plataforma` várias vezes e mostra, em verde, vermelho e amarelo:
-
-- quantas réplicas da `store-api` responderam e em quantas zonas de disponibilidade;
-- se a página está em HTTPS;
-- se a Downward API, o RBAC, o Secret, o banco, a fila, o worker e o CronJob estão funcionando;
-- a postura de segurança **real** do processo: UID, sistema de arquivos somente leitura,
-  capabilities, escalação de privilégio, seccomp e limites de CPU e memória.
-
-Usem o painel para se autoavaliar durante o desenvolvimento. **A nota não vem do painel**: na
-demonstração, cada item é conferido com `kubectl`.
+- Ferramentas: `aws` CLI v2, `eksctl`, `kubectl`, `helm`, `docker` (com buildx), `trivy`, `git`, `openssl`.
+- Acesso ao **AWS Academy Learner Lab** (o cluster e os nós usam a role `LabRole`; não há OIDC/IRSA).
+- No **Windows (Git Bash)**: comandos com argumentos que começam com `/` precisam de
+  `MSYS_NO_PATHCONV=1` (indicado abaixo onde é necessário).
 
 ---
 
-## Rodando localmente (antes de ir para o cluster)
+## 1. Credenciais do Learner Lab (toda sessão)
 
-Requer Docker com o plugin Compose.
+1. *Start Lab* → aguardar o indicador ficar verde → *AWS Details* → *AWS CLI: Show*.
+2. Copiar o bloco `[default]` para `~/.aws/credentials` (fora do repositório).
+3. Região:
+   ```bash
+   printf "[default]\nregion = us-east-1\n" > ~/.aws/config
+   aws sts get-caller-identity
+   ```
 
-```bash
-cd local
-docker compose up --build
-# abra http://localhost:8080
-```
+## 2. Imagens no ECR (uma vez por conta do lab)
 
-Gerar um relatório (no cluster, quem faz isso é o CronJob):
-
-```bash
-docker compose --profile manual run --rm relatorio
-```
-
-No ambiente local o painel mostra vários itens em vermelho — Downward API, RBAC, segurança e
-limites só existem no Kubernetes. Isso é esperado.
-
----
-
-## Build das imagens para o EKS
-
-> **Atenção (Mac com Apple Silicon):** os nós do EKS do laboratório são `x86_64`. Uma imagem
-> construída num Mac M1/M2/M3 sem `--platform` sai `arm64` e o Pod termina com
-> `exec format error`. **Sempre** construa com `--platform linux/amd64`.
+As imagens ficam no ECR da conta entre as sessões; só é preciso refazer se a conta mudar.
 
 ```bash
 export AWS_REGION=us-east-1
 export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 export REGISTRY=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-# 1. repositórios no ECR (uma vez)
 for repo in store-api store-worker store-front; do
-  aws ecr create-repository --repository-name $repo --region $AWS_REGION
+  aws ecr create-repository --repository-name $repo --region $AWS_REGION --no-cli-pager
 done
-
-# 2. login no ECR
 aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $REGISTRY
 
-# 3. build e push — store-api em DUAS versões
 docker buildx build --platform linux/amd64 --build-arg APP_VERSION=1.0 -t $REGISTRY/store-api:1.0 --push store-api
 docker buildx build --platform linux/amd64 --build-arg APP_VERSION=2.0 -t $REGISTRY/store-api:2.0 --push store-api
 docker buildx build --platform linux/amd64 -t $REGISTRY/store-worker:1.0 --push store-worker
 docker buildx build --platform linux/amd64 -t $REGISTRY/store-front:1.0 --push store-front
 ```
 
-A versão `2.0` da `store-api` é idêntica à `1.0` — muda só o número gravado na imagem, que aparece
-no topo da página. Serve para demonstrar rolling update e rollback: durante a troca, o selo mostra
-as duas versões convivendo.
+Scan de vulnerabilidades (resultado em `avaliacao/trivy/`):
+```bash
+trivy image $REGISTRY/store-api:1.0    > avaliacao/trivy/store-api.txt
+trivy image $REGISTRY/store-worker:1.0 > avaliacao/trivy/store-worker.txt
+trivy image $REGISTRY/store-front:1.0  > avaliacao/trivy/store-front.txt
+```
+
+> Se a conta do lab mudar, trocar o número da conta em `cluster.yaml` e nos `image:` da pasta `k8s/`.
+
+## 3. Criar o ambiente do zero (toda sessão)
+
+### 3.1 Cluster EKS (~20 min)
+```bash
+eksctl create cluster -f cluster.yaml
+kubectl get nodes -L topology.kubernetes.io/zone      # 4 nós Ready em 3 zonas
+```
+
+### 3.2 Componentes de plataforma
+```bash
+helm repo add traefik https://traefik.github.io/charts
+helm repo add kedacore https://kedacore.github.io/charts
+helm repo update
+
+helm upgrade --install traefik traefik/traefik -n traefik --create-namespace \
+  --set deployment.replicas=2 \
+  --set providers.kubernetesIngress.publishedService.enabled=true --wait
+
+helm upgrade --install keda kedacore/keda -n keda --create-namespace --wait
+
+kubectl create namespace argocd
+kubectl apply -n argocd --server-side --force-conflicts \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+```
+`publishedService.enabled=true` faz o Traefik publicar o endereço no `status` do Ingress; sem isso
+o Argo CD não marca a Application como `Healthy`.
+
+### 3.3 Endereço público da loja
+```bash
+export HOST=$(kubectl -n traefik get svc traefik -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+echo "https://$HOST"
+```
+
+### 3.4 Secrets (fora do Git)
+
+Os segredos **não estão no repositório**. São criados direto no cluster a cada sessão.
+
+**Senha do banco** — o mesmo valor nos dois namespaces (substituir `<SENHA>`; o valor é combinado
+entre os integrantes e não é registrado em nenhum arquivo):
+```bash
+kubectl create namespace store-prod
+kubectl create namespace store-data
+kubectl create secret generic store-db-credentials -n store-prod --from-literal=password='<SENHA>'
+kubectl create secret generic store-db-credentials -n store-data --from-literal=password='<SENHA>'
+```
+
+**Certificado TLS** autoassinado com o hostname do balanceador no `subjectAltName` (o `CN` tem limite
+de 64 caracteres, por isso usa um nome curto):
+```bash
+MSYS_NO_PATHCONV=1 openssl req -x509 -nodes -days 30 -newkey rsa:2048 \
+  -keyout tls.key -out tls.crt \
+  -subj "/CN=fiap-store" -addext "subjectAltName=DNS:$HOST"
+kubectl create secret tls store-tls -n store-prod --cert=tls.crt --key=tls.key
+rm tls.key tls.crt
+```
+
+### 3.5 GitOps com Argo CD
+```bash
+kubectl apply -f argocd-app.yaml
+kubectl get application -n argocd          # fiap-store  Synced  Healthy
+```
+
+- **Application do Argo CD:** [`argocd-app.yaml`](argocd-app.yaml) — nome `fiap-store`, namespace
+  `argocd`, origem `https://github.com/Lamataa/GS-fabio.git`, pasta `k8s/`, branch `main`,
+  `automated.prune` e `automated.selfHeal` ligados, com `retry`.
+- **Painel do Argo CD:**
+  ```bash
+  kubectl -n argocd port-forward svc/argocd-server 8443:443
+  # https://localhost:8443  usuário: admin
+  kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+  ```
+
+### 3.6 Rollout 1.0 → 2.0 e CronJob (obrigatório no cluster da demonstração)
+```bash
+# disparar o relatório a partir do CronJob
+kubectl create job --from=cronjob/store-report relatorio-manual-1 -n store-prod
+
+# rollout por commit
+sed -i 's#store-api:1.0#store-api:2.0#' k8s/30-store-api.yaml
+git commit -am "Rollout store-api 1.0 -> 2.0" && git push
+kubectl annotate application fiap-store -n argocd argocd.argoproj.io/refresh=normal --overwrite
+kubectl get rs -n store-prod -l app=store-api                       # 2 ReplicaSets
+```
+> Antes de recriar o cluster para a demonstração, voltar o `k8s/30-store-api.yaml` para `1.0`
+> (commit), para que o rollout aconteça no cluster novo.
+
+### 3.7 Verificação
+```bash
+MSYS_NO_PATHCONV=1 bash avaliacao/verifica-gs.sh https://$HOST       # 80/80
+```
 
 ---
 
-## Referência rápida da API
+## 4. Destruir todo o ambiente
 
-| Método | Rota | Descrição |
-|---|---|---|
-| GET | `/health` | liveness |
-| GET | `/ready` | readiness (verifica o banco) |
-| GET | `/metrics` | métricas Prometheus |
-| GET | `/api/produtos` | catálogo |
-| POST | `/api/pedidos` | cria um pedido: `{"produto_id": 1, "quantidade": 2}` |
-| POST | `/api/pedidos/lote?quantidade=50` | cria pedidos aleatórios (para ver o worker escalar) |
-| GET | `/api/pedidos?limite=20` | últimos pedidos e resumo |
-| GET | `/api/relatorios` | últimos relatórios do CronJob |
-| GET | `/api/plataforma` | autodiagnóstico da plataforma |
-| GET | `/api/carga?ms=200` | consome CPU por `ms` milissegundos (para provocar o HPA) |
-
-Gerar carga para o HPA, de dentro do cluster. O Pod de carga roda no namespace `default` porque o
-`store-prod`, com Pod Security `restricted`, recusaria um `busybox` sem `securityContext`:
+Na ordem (o Argo CD recriaria tudo se fosse apagado depois):
 
 ```bash
-kubectl run carga -n default --rm -it --restart=Never --image=busybox:1.36 -- \
-  sh -c 'while true; do wget -q -O- "http://store-api.store-prod/api/carga?ms=300" >/dev/null; done'
+# 1. Application do Argo CD
+kubectl delete application fiap-store -n argocd
+
+# 2. namespaces da aplicação; esperar os volumes EBS sumirem
+kubectl delete namespace store-prod store-data monitoring
+kubectl get pv                      # repetir até "No resources found"
+
+# 3. Traefik (remove o Load Balancer da AWS)
+helm uninstall traefik -n traefik
+
+# 4. cluster
+eksctl delete cluster -f cluster.yaml --disable-nodegroup-eviction
 ```
+
+5. Conferir no console da AWS (região `us-east-1`): **EC2 → Volumes** e **EC2 → Load Balancers**
+   sem recursos do projeto; **CloudFormation** sem stacks `eksctl-fiap-store-*`.
 
 ---
 
-## Estrutura do repositório
+## 5. Desafios ao vivo — comandos
 
-```
-fiap-store/
-  store-api/        código, requirements e Dockerfile da API (inclui o db-migrate)
-  store-worker/     código, requirements e Dockerfile do worker (inclui o store-report)
-  store-front/      página, script do painel e Dockerfile do nginx
-  local/            docker-compose para rodar na máquina
-  avaliacao/        verifica-gs.sh — o script usado na demonstração
-  k8s/              <- CRIADO POR VOCÊS: todos os manifestos da plataforma
-```
+| # | Desafio | Comando |
+|---|---|---|
+| 1 | Self-healing | `kubectl delete -n store-prod $(kubectl get pod -n store-prod -l app=store-api -o name \| head -1)` (apaga um Pod) e `kubectl get pods -n store-prod -l app=store-api -w` |
+| 2 | Manutenção de nó | `kubectl get pod store-db-0 -n store-data -o wide` (ver o nó do banco); `kubectl drain <outro-no> --ignore-daemonsets --delete-emptydir-data`; depois `kubectl uncordon <outro-no>` |
+| 3 | Rollback por GitOps | trocar a tag em `k8s/30-store-api.yaml`, `git commit` + `git push`; o selo da página mostra a versão |
+| 4 | Escala a zero | gerar 50 pedidos no painel; `kubectl get pods -n store-prod -l app=store-worker -w` |
+| 5 | Persistência | `kubectl delete pod store-db-0 -n store-data`; os pedidos continuam na página |
+| 6 | Pod Security | `kubectl run priv -n store-prod --image=busybox:1.36 --privileged -- sleep 3600` → recusado |
+| 7 | RBAC | `kubectl auth can-i list pods -n store-prod --as=dev --as-group=fiap:devs` (yes); `delete pods`, `get secrets`, `create pods --subresource=exec` (no) |
+| 8 | Drift | `kubectl delete service store-front -n store-prod` → o Argo CD recria |
+| 9 | Rede | `kubectl exec -n store-prod deploy/store-front -- nc -z -w 3 store-db.store-data.svc.cluster.local 5432` (falha) e o mesmo da `store-api` com Python (conecta) |
+| 10 | Relatório sob demanda | `kubectl create job --from=cronjob/store-report relatorio-$(date +%s) -n store-prod` |
 
-Os manifestos ficam em `k8s/`. É essa pasta que o Argo CD vai sincronizar com o cluster.
+---
+
+## 6. Segurança
+
+- Nenhum segredo no Git: senha do banco e certificado são criados com `kubectl create secret`.
+- `store-prod` com Pod Security `restricted` (enforce); todos os contêineres com `runAsNonRoot`,
+  `seccompProfile: RuntimeDefault`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`,
+  `capabilities.drop: ["ALL"]`.
+- Token da API do Kubernetes montado apenas na `store-api`, cuja ServiceAccount só pode `get nodes`.
+- `store-data` sem entrada por padrão; só API, worker, jobs e o operador do KEDA alcançam banco/Redis.
+- Scan Trivy das 3 imagens em [`avaliacao/trivy/`](avaliacao/trivy/) com a análise dos `CRITICAL` em
+  [`avaliacao/trivy/JUSTIFICATIVA.md`](avaliacao/trivy/JUSTIFICATIVA.md).
+
+## 7. Uso de IA
+
+Declaração exigida pelo enunciado (seção 14):
+
+| Ferramenta | Para quê |
+|---|---|
+| Claude (Anthropic) | apoio na leitura do enunciado, no planejamento das etapas, na escrita e revisão dos manifestos Kubernetes, do `argocd-app.yaml`, deste README e da análise do Trivy, e na solução de erros do ambiente Windows/Git Bash |
+
+Todos os manifestos foram revisados, aplicados e testados pelo grupo no cluster EKS
+(`verifica-gs.sh`: 80/80), e cada integrante é capaz de explicar cada arquivo da pasta `k8s/`.
