@@ -16,7 +16,6 @@ armazenamento, segurança, escalonamento e entrega por GitOps (Argo CD).
 |---|---|
 | Gabriel Lamata | RM562093 |
 | Luiz Gustavo Parpinelli | RM566493 |
-| _____ | RM_____ |
 
 ---
 
