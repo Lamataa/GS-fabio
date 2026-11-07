@@ -56,7 +56,7 @@ spec:
               app: store-api
       containers:
         - name: store-api
-          image: 834071646683.dkr.ecr.us-east-1.amazonaws.com/store-api:1.0
+          image: 834071646683.dkr.ecr.us-east-1.amazonaws.com/store-api:2.0
           ports:
             - containerPort: 8000
           envFrom:
